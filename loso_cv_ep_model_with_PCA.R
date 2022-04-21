@@ -8,6 +8,8 @@ library(Rtsne)
 set.seed(1)
 rnorm(1)
 
+install.packages("pandas")
+library(pandas)
 # Access tidyverse
 # install.packages("tidyverse")
 library(tidyverse)
@@ -45,27 +47,42 @@ pbp_ep_model_data <- read.csv("data/pbp_ep_model_data.csv") %>%
 #' 
 #' 
 ################# ORIGINAL CODE: IMPLEMENTING PCA #########################################
-# store and remove the ID variables (normally remove target as well, but not present in this instance)
-id <- pbp_ep_model_data$GameID
-pbp_ep_model_data$GameID <- NULL
-play_id <- pbp_ep_model_data$play_id
-pbp_ep_model_data$play_id <- NULL
-date <- pbp_ep_model_data$Date
-pbp_ep_model_data$Date <- NULL
-desc <- pbp_ep_model_data$desc
-pbp_ep_model_data$desc <- NULL
-# reduce the dataset to numerical data only
-pbp_ep_model_data_reduced <- select(pbp_ep_model_data, 'Drive', 'qtr', 'down', 'TimeUnder', 'TimeSecs', 'PlayTimeDiff',
-                                                       'yrdln', 'yrdline100', 'ydstogo', 'ydsnet', 'Yards.Gained',
-                                                       'PassAttempt', 'AirYards', 'YardsAfterCatch', 'No_Score_Prob',
+# store and remove the ID variables (target variable is next_score_half)
+pbp_ep_model_data_PCA <- pbp_ep_model_data
+
+season <- pbp_ep_model_data_PCA$Season
+#pbp_ep_model_data_PCA$Season <- NULL
+
+next_score_half <- pbp_ep_model_data_PCA$Next_Score_Half
+#pbp_ep_model_data_PCA$Next_Score_Half <- NULL
+
+id <- pbp_ep_model_data_PCA$GameID
+#pbp_ep_model_data_PCA$GameID <- NULL
+
+play_id <- pbp_ep_model_data_PCA$play_id
+#pbp_ep_model_data_PCA$play_id <- NULL
+
+date <- pbp_ep_model_data_PCA$Date
+#pbp_ep_model_data_PCA$Date <- NULL
+
+description <- pbp_ep_model_data_PCA$desc
+#pbp_ep_model_data_PCA$desc <- NULL
+
+
+# reduce the dataset to numerical data only that will be used in PCA
+pbp_ep_model_data_reduced <- select(pbp_ep_model_data_PCA, 'Drive', 'qtr', 'TimeUnder', 'TimeSecs', 'PlayTimeDiff',
+                                                       'yrdln', 'ydstogo', 'ydsnet', 'Yards.Gained',
+                                                       'AirYards', 'YardsAfterCatch', 'No_Score_Prob',
                                                        'Opp_Field_Goal_Prob', 'Opp_Safety_Prob', 'Opp_Touchdown_Prob',
                                                        'Field_Goal_Prob', 'Safety_Prob', 'Touchdown_Prob',
-                                                       'EPA', 'airEPA', 'yacEPA', 'log_ydstogo',
-                                                       'Under_TwoMinute_Warning', 'Drive_Score_Dist',  
-                                                       'Drive_Score_Dist_W',  'ScoreDiff_W', 'Total_W')
-is.na(pbp_ep_model_data_reduced)
-pbp_ep_model_data_reduced <- na.omit(pbp_ep_model_data_reduced)
-pbp_ep_model_data_reduced$down <- as.numeric(pbp_ep_model_data_reduced$down)
+                                                       'EPA', 'airEPA', 'yacEPA', 'FirstDown', 'FieldGoalDistance',
+                                                       'Penalty.Yards', 'Home_WP_pre', 'Away_WP_pre',
+                                                       'WPA', 'airWPA', 'yacWPA'
+                                    )
+
+# replace all na values in the reduced dataset to 0 so that it will work in PCA
+
+pbp_ep_model_data_reduced[is.na(pbp_ep_model_data_reduced)] <- 0
 
 # Normalize variables for PCA
 preproc1 <- preProcess(pbp_ep_model_data_reduced, method=c("center", "scale"))
@@ -74,7 +91,7 @@ norm1 <- predict(preproc1, pbp_ep_model_data_reduced)
 
 summary(norm1)
 
-# Run PCA on the data
+# Run PCA on the normalized dataset
 pca <- prcomp(norm1)
 
 # look at the amount of variance explained by components
@@ -84,7 +101,26 @@ summary(pca)
 
 biplot(pca)
 
+# because the first 17 components account for 95% of the variance, we're only keeping those
 pca_dt <- data.table(unclass(pca)$x)
+select_cols = c("PC1", "PC2", "PC3", "PC4", "PC5", "PC6", "PC7", "PC8", "PC9", "PC10", "PC11", "PC12", "PC13", "PC14", "PC15", "PC16", "PC17")
+best_pca_dt <- pca_dt[ , ..select_cols]
+best_pca <- as.data.frame(best_pca_dt)
+
+# drop the numerical columns from the dataset and add the chosen principal components
+pbp_ep_model_data_PCA <- as.data.frame(pbp_ep_model_data_PCA)
+pbp_ep_model_data_PCA <- subset(pbp_ep_model_data_PCA, select = -c(Drive, qtr, TimeUnder, TimeSecs, PlayTimeDiff,
+                                                                   yrdln, ydstogo, ydsnet, Yards.Gained,
+                                                                   AirYards, YardsAfterCatch, No_Score_Prob,
+                                                                   Opp_Field_Goal_Prob, Opp_Safety_Prob, Opp_Touchdown_Prob,
+                                                                   Field_Goal_Prob, Safety_Prob, Touchdown_Prob,
+                                                                   EPA, airEPA, yacEPA, Home_WP_pre, Away_WP_pre,
+                                                                   WPA, airWPA, yacWPA
+                                                                   
+                                                                   ) )
+pbp_ep_model_data_PCA <- cbind(pbp_ep_model_data_PCA, best_pca)
+
+############################### END OF ORIGINAL CODE #########################################
 
 calc_ep_multinom_loso_cv <- function(ep_formula, weight_type = 3, 
                                      ep_model_data) {
@@ -174,7 +210,7 @@ calc_ep_multinom_loso_cv <- function(ep_formula, weight_type = 3,
     return
 }
 
-# Create the LOSO predictions for the selected nflscrapR model:
+# Create the LOSO predictions for the selected nflscrapR model (ep_model_data replaced with PCA data):
 
 ep_model_loso_preds <- calc_ep_multinom_loso_cv(as.formula("Next_Score_Half ~ 
                                                            TimeSecs_Remaining + 
@@ -184,7 +220,7 @@ ep_model_loso_preds <- calc_ep_multinom_loso_cv(as.formula("Next_Score_Half ~
                                                            yrdline100*down + 
                                                            GoalToGo*log_ydstogo + 
                                                            Under_TwoMinute_Warning"),
-                                                ep_model_data = pca_dt)
+                                                ep_model_data = pbp_ep_model_data_PCA)
 
 # Save dataset in data folder as ep_model_loso_preds.csv
 # (NOTE: this dataset is not pushed due to its size exceeding
@@ -264,7 +300,8 @@ cv_cal_error <- ep_cv_loso_calibration_results %>%
   
 # Overall weighted calibration error:
 with(cv_cal_error, weighted.mean(weight_cal_error, n_scoring_event))
-# 0.01309723
+# Original error: 0.01309723
+# Improved error with PCA data: 0.01309072
 
 # ------------------------------------------------------------------
 
@@ -466,7 +503,7 @@ ep_fg_model_loso_preds <- calc_ep_multinom_fg_loso_cv(as.formula("Next_Score_Hal
                                                            GoalToGo*log_ydstogo + 
                                                            Under_TwoMinute_Warning"),
                                                    as.formula("sp ~ s(yrdline100)"),
-                                                ep_model_data = pbp_ep_model_data)
+                                                ep_model_data = pbp_ep_model_data_PCA)
 
 # Use the following pipeline to create a dataset used for charting the
 # cross-validation calibration results:
@@ -533,5 +570,7 @@ cv_fg_cal_error <- ep_fg_cv_loso_calibration_results %>%
 # Overall weighted calibration error:
 with(cv_fg_cal_error, weighted.mean(weight_cal_error, n_scoring_event))
 # 0.01424929
+
+
 
 
